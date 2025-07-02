@@ -1,0 +1,144 @@
+# These substitutions allow the end user to override certain values
+substitutions:
+  name: esp32_s3_matrix
+  friendly_name: esp32_s3_matrix
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2024.6.0
+  name_add_mac_suffix: true
+  platformio_options:
+    board_build.flash_mode: dio
+  project:
+    name: esphome.web
+    version: dev
+
+api:
+  encryption:
+    key: !secret api_key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  manual_ip:
+    static_ip: 192.168.X.X  # Change this to match your network
+    gateway: 192.168.X.1
+    subnet: 255.255.255.0
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+    version: recommended
+
+# Enable logging
+logger:
+
+# Allow Over-The-Air updates
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+    filters:
+      - lambda: return x / 3600;
+    unit_of_measurement: "h"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+
+  - platform: version
+    name: "ESPHome Version"
+
+light:
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO14
+    num_leds: 64
+    rgb_order: RGB
+    name: "8x8 LED Matrix"
+    id: led_matrix
+    effects:
+      - addressable_rainbow:
+      - addressable_color_wipe:
+      - addressable_scan:
+      - addressable_twinkle:
+      - addressable_flicker:
+      - addressable_fireworks:
+      - addressable_random_twinkle:
+
+# Time source
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# Font (must be in your ESPHome config folder)
+font:
+  - file: "pixelmix.ttf"
+    id: pixel_font
+    size: 8
+
+# Display: scroll HH:MM and "Yasin Hasan" continuously
+display:
+  - platform: addressable_light
+    id: led_matrix_display
+    addressable_light_id: led_matrix
+    width: 8
+    height: 8
+    rotation: 0
+    update_interval: 150ms
+    lambda: |-
+      // Define the static x_offset. This now represents the starting X-coordinate of the text.
+      // Initialize it to the width of the display (8 pixels) so the text starts completely off-screen to the right.
+      static int x_offset = 8;
+
+      // Get the current time from Home Assistant.
+      auto now = id(ha_time).now();
+      // If the time is not valid, stop execution for this update cycle.
+      if (!now.is_valid()) return;
+
+      // Format the hour (12-hour format) and minute.
+      int hour = now.hour % 12;
+      if (hour == 0) hour = 12; // Convert 0 to 12 for 12-hour format
+      int minute = now.minute;
+
+      // Create a buffer for the time string.
+      char time_buffer[6]; // Sufficient for "HH:MM\0" (e.g., "12:34")
+      snprintf(time_buffer, sizeof(time_buffer), "%2d:%02d", hour, minute);
+
+      // Construct the full text string to be displayed.
+      // Added spaces around "TEXT" for better visual separation during scroll.
+      // Standard spaces are used instead of non-breaking spaces for consistency.
+      std::string full_text = std::string(time_buffer) + "    HELLO THERE";
+
+      // Calculate the approximate pixel width of the entire text string.
+      // The pixelmix font at size 8 typically uses about 6 pixels per character horizontally.
+      int text_pixel_width = full_text.length() * 6;
+
+      // Clear the display by filling it with black color before drawing new content.
+      it.fill(Color::BLACK);
+      // Print the full text string on the display at the current x_offset.
+      // A positive x_offset means the text starts further to the right.
+      it.print(x_offset, 0, id(pixel_font), full_text.c_str());
+
+      // Decrement the x_offset to move the text one pixel to the left for the next update.
+      x_offset--;
+
+      // Check if the entire text has scrolled completely off the left side of the display.
+      // The text is off-screen when its starting point (x_offset) is less than
+      // the negative of its total pixel width.
+      if (x_offset < -text_pixel_width) {
+        // If it's off-screen, reset x_offset back to the right edge of the display
+        // to make it appear to scroll in from the right again seamlessly.
+        x_offset = 8;
+      }
