@@ -1,0 +1,219 @@
+# These substitutions allow the end user to override certain values
+substitutions:
+  name: esp32_s3_matrix
+  friendly_name: esp32_s3_matrix
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2024.6.0
+  name_add_mac_suffix: true
+  platformio_options:
+    board_build.flash_mode: dio
+  project:
+    name: esphome.web
+    version: dev
+
+api:
+  encryption:
+    key: !secret api_key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  manual_ip:
+    static_ip: 192.168.X.X  # Change this to match your network
+    gateway: 192.168.X.1
+    subnet: 255.255.255.0
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+    version: recommended
+
+# Enable logging
+logger:
+
+# Allow Over-The-Air updates
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Light component for the LED matrix
+light:
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO14
+    num_leds: 64
+    rgb_order: RGB
+    name: "8x8 LED Matrix"
+    id: led_matrix
+
+# Font (must be in your ESPHome config folder)
+font:
+  - file: "pixelmix.ttf"
+    id: pixel_font
+    size: 8
+
+# Global variables to control the display state and animation progress
+globals:
+  - id: display_state_mode
+    type: int
+    restore_value: true # Remember the last state
+    initial_value: "0" # 0: Off, 1: Red Wave, 2: Door Open Text, 3: Door Closed Text, 4: Green Wave
+  - id: animation_progress_counter
+    type: int
+    restore_value: false
+    initial_value: "0"
+  - id: door_sensor_last_state
+    type: bool
+    restore_value: true
+    initial_value: "false" # Assume door is initially closed
+  - id: closed_text_loop_counter # New global to track loops for "CLOSED" text
+    type: int
+    restore_value: false
+    initial_value: "0"
+
+# Binary sensor to monitor the door light from Home Assistant
+binary_sensor:
+  - platform: homeassistant
+    id: balcony_door_sensor # ESPHome ID for this sensor
+    entity_id: binary_sensor.balcony_door_contact_sensor # Updated to the new entity ID
+    on_state:
+      then:
+        # If the door just opened (transition from false to true/open)
+        - if:
+            condition:
+              lambda: 'return x == true && id(door_sensor_last_state) == false;'
+            then:
+              - lambda: 'id(display_state_mode) = 1;' # Set mode to Red Wave
+              - lambda: 'id(animation_progress_counter) = 0;' # Reset animation counter for new sequence
+        # If the door just closed (transition from true to false/closed)
+        - if:
+            condition:
+              lambda: 'return x == false && id(door_sensor_last_state) == true;'
+            then:
+              - lambda: 'id(display_state_mode) = 4;' # Set mode to Green Wave (new)
+              - lambda: 'id(animation_progress_counter) = 0;' # Reset animation counter for new sequence
+              - lambda: 'id(closed_text_loop_counter) = 0;' # Reset loop counter for "CLOSED" text
+        # Always update the last state of the door sensor
+        - lambda: 'id(door_sensor_last_state) = x;'
+
+
+# Display component to render content on the LED matrix
+display:
+  - platform: addressable_light
+    id: led_matrix_display
+    addressable_light_id: led_matrix
+    width: 8
+    height: 8
+    rotation: 0
+    # Update interval for the display. Adjust for animation and scroll speed.
+    update_interval: 100ms # 10 frames per second
+    lambda: |-
+      // Include for std::string usage
+      #include <string>
+
+      // Clear the display at the start of each update cycle
+      it.fill(Color(0, 0, 0)); // Black color
+
+      // Get the current display mode (access global value directly)
+      int current_mode = id(display_state_mode);
+
+      if (current_mode == 1) { // Red Wave Animation (Door Opening)
+        // Draw a red column that moves across the display
+        // The column width is 1 pixel, and it moves from left to right, then off-screen
+        // The `animation_progress_counter` controls the X position of the wave.
+        int x_wave_pos = id(animation_progress_counter); // Access global value directly
+
+        // Ensure the wave stays within a reasonable range for the animation effect
+        if (x_wave_pos < id(led_matrix_display).get_width() + 4) { // Wave extends a bit beyond the matrix
+          for (int y = 0; y < id(led_matrix_display).get_height(); y++) {
+            // Draw a red pixel at the current wave position
+            it.draw_pixel_at(x_wave_pos, y, Color(255, 0, 0)); // Red color
+            // Add a fading trail effect by drawing dimmer red pixels behind
+            if (x_wave_pos - 1 >= 0) it.draw_pixel_at(x_wave_pos - 1, y, Color(0x30, 0x00, 0x00));
+            if (x_wave_pos - 2 >= 0) it.draw_pixel_at(x_wave_pos - 2, y, Color(0x10, 0x00, 0x00));
+          }
+          // Increment the counter to move the wave for the next update (update global value directly)
+          id(animation_progress_counter) = id(animation_progress_counter) + 1;
+        } else {
+          // If the wave has moved off-screen, transition to "DOOR OPEN" text display mode
+          id(display_state_mode) = 2; // Change mode to Door Open Text directly
+          // Reset animation counter to start text from the right for continuous looping
+          id(animation_progress_counter) = id(led_matrix_display).get_width();
+        }
+      } else if (current_mode == 2) { // "DOOR OPEN" Text (Looping while open)
+        std::string text_to_display = "DOOR OPEN";
+        // For "DOOR OPEN" on 8x8 with pixelmix.ttf, each char is roughly 5px wide + 1px spacing = 6px.
+        // "DOOR OPEN" has 9 characters (including space). So 9 * 6 = 54 pixels.
+        const int text_pixel_width = 54;
+
+        // `animation_progress_counter` now controls the text's X offset.
+        // It starts from the right edge and moves left.
+        int x_offset = id(animation_progress_counter); // Access global value directly
+
+        // Draw the text
+        it.print(x_offset, 0, id(pixel_font), Color(255, 0, 0), text_to_display.c_str()); // Red color
+
+        // Decrement the offset to scroll the text to the left (update global value directly)
+        id(animation_progress_counter) = id(animation_progress_counter) - 1;
+
+        // Check if the text has scrolled completely off the left side of the display
+        if (id(animation_progress_counter) < -text_pixel_width) {
+          // If the text is off-screen, loop it back to the right
+          id(animation_progress_counter) = id(led_matrix_display).get_width(); // Reset counter to start from right
+        }
+      } else if (current_mode == 4) { // Green Wave Animation (Door Closing - New Mode)
+        // Draw a green column that moves across the display
+        int x_wave_pos = id(animation_progress_counter);
+
+        if (x_wave_pos < id(led_matrix_display).get_width() + 4) {
+          for (int y = 0; y < id(led_matrix_display).get_height(); y++) {
+            it.draw_pixel_at(x_wave_pos, y, Color(0, 255, 0)); // Green color
+            if (x_wave_pos - 1 >= 0) it.draw_pixel_at(x_wave_pos - 1, y, Color(0x00, 0x30, 0x00));
+            if (x_wave_pos - 2 >= 0) it.draw_pixel_at(x_wave_pos - 2, y, Color(0x00, 0x10, 0x00));
+          }
+          id(animation_progress_counter) = id(animation_progress_counter) + 1;
+        } else {
+          // If the green wave has moved off-screen, transition to "CLOSED" text display mode
+          id(display_state_mode) = 3; // Change mode to Door Closed Text
+          id(animation_progress_counter) = id(led_matrix_display).get_width(); // Reset counter for text scrolling
+        }
+      } else if (current_mode == 3) { // "CLOSED" Text (Looping 3 times)
+        std::string text_to_display = "CLOSED";
+        // For "CLOSED" on 8x8 with pixelmix.ttf, each char is roughly 5px wide + 1px spacing = 6px.
+        // "CLOSED" has 6 characters. So 6 * 6 = 36 pixels.
+        const int text_pixel_width = 36; // Approximate width for "CLOSED"
+
+        // `animation_progress_counter` now controls the text's X offset.
+        int x_offset = id(animation_progress_counter); // Access global value directly
+
+        // Draw the text
+        it.print(x_offset, 0, id(pixel_font), Color(0, 255, 0), text_to_display.c_str()); // Green color
+
+        // Decrement the offset to scroll the text to the left
+        id(animation_progress_counter) = id(animation_progress_counter) - 1;
+
+        // Check if the text has scrolled completely off the left side of the display
+        if (id(animation_progress_counter) < -text_pixel_width) {
+          // If the text is off-screen, increment the loop counter
+          id(closed_text_loop_counter) = id(closed_text_loop_counter) + 1;
+
+          // Check if we've looped 3 times
+          if (id(closed_text_loop_counter) < 3) {
+            // If less than 3 loops, reset counter to loop again
+            id(animation_progress_counter) = id(led_matrix_display).get_width(); // Reset counter to start from right
+          } else {
+            // If 3 loops completed, turn off display
+            id(display_state_mode) = 0; // Turn off display mode
+            id(animation_progress_counter) = 0; // Reset counter
+            id(closed_text_loop_counter) = 0; // Reset loop counter
+            it.fill(Color(0, 0, 0)); // Ensure matrix is cleared
+          }
+        }
+      } else { // Default mode (current_mode == 0, i.e., door is closed and "CLOSED" text finished)
+        it.fill(Color(0, 0, 0)); // Keep the display off/clear (Black color)
+      }
