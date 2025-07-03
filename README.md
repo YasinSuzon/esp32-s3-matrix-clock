@@ -1,9 +1,11 @@
-ESP32-S3 Matrix Clock
-A customizable matrix clock powered by the ESP32-S3 Matrix 8x8 RGB-LED-WiFi-Bluetooth board. This ESPHome-based project scrolls the current time and custom messages across a vibrant LED grid, integrated with Home Assistant. Minimal hardware, maximum pixel flair.
+ESP32-S3 LED Matrix Codes
+A customizable matrix clock powered by the ESP32-S3 Matrix 8x8 RGB-LED-WiFi-Bluetooth board. This ESPHome-based project scrolls the current time, custom messages, sensor data across a vibrant LED grid, integrated with Home Assistant. Minimal hardware, maximum pixel flair.
 
 Features
 - Displays current time using Home Assistant integration
 - Scrolls text like "HELLO THERE" in pixel font
+- Showing current weather from Home Assistant sensors
+- Showing a door status from HA sensors with text 'Door is Open'
 - Uses ESPHome with addressable light platform
 - Color effects using FastLED (rainbow, twinkle, scan, etc.)
 - OTA updates and Wi-Fi signal monitoring
